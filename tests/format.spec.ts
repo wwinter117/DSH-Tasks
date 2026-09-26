@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatClock, formatClockSeconds, formatDuration, formatStamp, tickStep, ticks } from '../src/client/format.ts'
+import { formatClock, formatClockSeconds, formatDuration, formatStamp, formatTick, tickStep, ticks } from '../src/client/format.ts'
 
 const UNITS = { hour: 'h', minute: 'm', second: 's' }
 
@@ -39,26 +39,41 @@ describe('formatDuration', () => {
 })
 
 describe('tickStep', () => {
+  const HOUR = 3_600_000
+
   it('keeps at least the target pixels between two labels', () => {
-    for (const windowMs of [15 * 60_000, 3_600_000, 6 * 3_600_000, 24 * 3_600_000]) {
+    for (const viewportMs of [30 * 60_000, HOUR, 6 * HOUR, 24 * HOUR]) {
       for (const width of [300, 900, 1600]) {
-        const step = tickStep(windowMs, width)
-        expect((windowMs / step) * width).toBeGreaterThanOrEqual(110)
+        const pxPerMs = width / viewportMs
+        expect(tickStep(pxPerMs) * pxPerMs).toBeGreaterThanOrEqual(110)
       }
     }
   })
 
   it('never picks a coarser step than the spacing requires', () => {
-    // The step below 15 minutes would already clear 110 px at this size.
-    expect(tickStep(3_600_000, 4000)).toBe(5 * 60_000)
+    // An hour across 4000 px: the step below 15 minutes already clears 110 px.
+    expect(tickStep(4000 / HOUR)).toBe(5 * 60_000)
   })
 
-  it('picks a coarser step when the same window is compressed', () => {
-    expect(tickStep(24 * 3_600_000, 300)).toBeGreaterThan(tickStep(24 * 3_600_000, 1200))
+  it('picks a coarser step when the same viewport is narrower', () => {
+    expect(tickStep(300 / (24 * HOUR))).toBeGreaterThan(tickStep(1200 / (24 * HOUR)))
   })
 
-  it('falls back to the coarsest step for an absurd window', () => {
-    expect(tickStep(365 * 24 * 3_600_000, 800)).toBe(86_400_000)
+  it('falls back to the coarsest step for an absurd scale', () => {
+    expect(tickStep(800 / (365 * 24 * HOUR))).toBe(7 * 86_400_000)
+  })
+})
+
+describe('formatTick', () => {
+  const HOUR = 3_600_000
+  const at = new Date(2026, 8, 26, 9, 5, 0).getTime()
+
+  it('uses a wall clock while the step stays inside a day', () => {
+    expect(formatTick(at, HOUR)).toBe('09:05')
+  })
+
+  it('adds the date once the step reaches half a day', () => {
+    expect(formatTick(at, 12 * HOUR)).toBe('09-26 09:05')
   })
 })
 

@@ -1,8 +1,14 @@
 /**
- * Pure timeline model: the drawn window, the workspace lanes, and the phase merge.
+ * Pure timeline model: the scrollable content extent, the workspace lanes, and
+ * the phase merge.
  *
- * Nothing here touches React or `ctx`, so the layout decisions the panel makes are
- * unit-testable without a renderer.
+ * Two ranges are distinct here. The **content extent** is the whole stretch of
+ * time the track spans; the **viewport** is the slice of it the reader sees,
+ * whose duration the zoom presets choose. The reader pans the viewport freely,
+ * so nothing in this module knows or cares where it currently sits.
+ *
+ * Nothing here touches React or `ctx`, so the layout decisions the panel makes
+ * are unit-testable without a renderer.
  * @module dsh-tasks/client/model
  */
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
@@ -11,34 +17,36 @@ import type { SessionStatus, SessionStatusSnapshot } from '@deepseek-ai/dsh-clie
 import type { WorkspaceView } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { WorkspaceId } from '@deepseek-ai/dsh-api-workspace-controller/client'
-// The `title` projection key is declared lexically in the `./types` module of the
-// title package and only re-exported from its root, so the merge loads only when
-// that subpath is in the program.
-import type {} from '@deepseek-ai/dsh-session-title/types'
 import type { TaskPhase, TaskSpan, WorkPhase } from '../contract.ts'
 import { PROJECTION_KEY } from '../contract.ts'
 
-/** Shortest window the automatic fit will produce. */
-export const MIN_WINDOW_MS = 15 * 60 * 1000
-/** Longest window the automatic fit will produce. */
-export const MAX_WINDOW_MS = 24 * 60 * 60 * 1000
-/** Window used when nothing happened inside the lookback. */
-export const IDLE_WINDOW_MS = 2 * 60 * 60 * 1000
-/** How far back activity still influences the automatic fit and the backfill set. */
+/** Shortest viewport the automatic zoom will choose. */
+export const AUTO_MIN_MS = 30 * 60 * 1000
+/**
+ * Longest viewport the automatic zoom will choose. Half the viewport sits to the
+ * right of now, and time that has not happened yet is worth little, so the
+ * automatic zoom stays well below {@link LOOKBACK_MS}.
+ */
+export const AUTO_MAX_MS = 6 * 60 * 60 * 1000
+/** Viewport used when nothing happened inside the lookback. */
+export const IDLE_VIEWPORT_MS = 2 * 60 * 60 * 1000
+/** How far back activity still contributes rows, the zoom, and the backfill set. */
 export const LOOKBACK_MS = 24 * 60 * 60 * 1000
-/** Fraction of the active range added as breathing room on the left. */
-const PAD_FRACTION = 0.08
+/** Least breathing room added beside the content. */
+const MIN_PAD_MS = 60 * 1000
+/** Fraction of the viewport added as breathing room beside the content. */
+const PAD_FRACTION = 0.04
 
-/** Fixed window choices the header offers, in milliseconds. */
-export const WINDOW_PRESETS = [
+/** Zoom choices the header offers; `undefined` means the automatic zoom. */
+export const VIEWPORT_PRESETS = [
   { id: 'auto', ms: undefined },
   { id: '1h', ms: 60 * 60 * 1000 },
   { id: '6h', ms: 6 * 60 * 60 * 1000 },
   { id: '24h', ms: 24 * 60 * 60 * 1000 },
 ] as const
 
-/** One fixed-window preset identity. */
-export type WindowPresetId = (typeof WINDOW_PRESETS)[number]['id']
+/** One zoom preset identity. */
+export type ViewportPresetId = (typeof VIEWPORT_PRESETS)[number]['id']
 
 /** The typed translate seat this namespace's registrations receive. */
 export type TasksTranslate = PropsLocale<'dsh-tasks'>['t']
@@ -46,19 +54,17 @@ export type TasksTranslate = PropsLocale<'dsh-tasks'>['t']
 /** One Session drawn as a task row. */
 export interface TimelineTask {
   readonly sessionId: SessionId
-  /** Current title, or the identity's short form before a title event exists. */
+  /** Human-facing label the client row already resolved. */
   readonly title: string
+  /** Intervals clipped to the content extent, oldest first. */
   readonly spans: readonly TaskSpan[]
-  /** Span times are clipped to the window; these say the row continues past an edge. */
-  readonly clippedStart: boolean
-  readonly clippedEnd: boolean
   readonly phase: TaskPhase
   readonly running: boolean
   /** A finished run the user has not looked at yet. */
   readonly unread: boolean
   /** Exact time of the last committed event, `0` when the log has none. */
   readonly lastEventAt: number
-  /** Session creation time, from the header. */
+  /** Time of the last human prompt, from the client row. */
   readonly updatedAt: number
 }
 
@@ -73,12 +79,16 @@ export interface TimelineLane {
 
 /** Everything the panel needs to draw one frame. */
 export interface TimelineModel {
-  readonly from: number
-  readonly to: number
+  /** Left edge of the scrollable content. */
+  readonly contentFrom: number
+  /** Right edge of the scrollable content. */
+  readonly contentTo: number
+  /** Duration of the visible slice, after an automatic zoom is resolved. */
+  readonly viewportMs: number
   readonly lanes: readonly TimelineLane[]
   /** Sessions inside the lookback whose projection row is still missing. */
   readonly unloaded: readonly SessionId[]
-  /** Sessions that had activity in the window but are hidden by a filter. */
+  /** Sessions that had activity in the content but are hidden by a filter. */
   readonly hiddenTasks: number
   /** Workspaces whose every visible Session was filtered out. */
   readonly hiddenWorkspaces: number
@@ -90,8 +100,8 @@ export interface TimelineInput {
   readonly list: SessionListState
   readonly statuses: SessionStatusSnapshot
   readonly now: number
-  /** Fixed window length, or `undefined` for the automatic fit. */
-  readonly windowMs: number | undefined
+  /** Fixed viewport duration, or `undefined` for the automatic zoom. */
+  readonly viewportMs: number | undefined
   /** Whether subagent child Sessions get their own row. */
   readonly includeSubagents: boolean
 }
@@ -135,19 +145,11 @@ function spansOf(
   return { loaded: true, spans: value.spans }
 }
 
-/**
- * Compute the drawn window.
- *
- * The right edge is always `now`, so the live cursor sits on the frame edge. The
- * length tracks whatever activity falls inside {@link LOOKBACK_MS}, clamped to
- * [MIN_WINDOW_MS, MAX_WINDOW_MS]; with no activity it falls back to
- * {@link IDLE_WINDOW_MS} of empty time.
- * @param spans - every span considered for the fit.
- * @param now - right edge of the window.
- * @returns window bounds in Unix epoch milliseconds.
- */
-export function fitWindow(spans: readonly TaskSpan[], now: number): { from: number; to: number } {
-  if (spans.length === 0) return { from: now - IDLE_WINDOW_MS, to: now }
+/** Span bounds across everything that still counts as recent. */
+function recentBounds(
+  spans: readonly TaskSpan[],
+  now: number,
+): { readonly earliest: number; readonly latest: number } {
   let earliest = Number.POSITIVE_INFINITY
   let latest = Number.NEGATIVE_INFINITY
   for (const [start, end] of spans) {
@@ -155,20 +157,60 @@ export function fitWindow(spans: readonly TaskSpan[], now: number): { from: numb
     if (start < earliest) earliest = start
     if (end > latest) latest = end
   }
-  if (earliest === Number.POSITIVE_INFINITY) return { from: now - IDLE_WINDOW_MS, to: now }
+  return { earliest, latest }
+}
+
+/**
+ * Choose the automatic viewport duration from how far recent activity reaches.
+ *
+ * The reach is padded for breathing room and clamped to
+ * [AUTO_MIN_MS, AUTO_MAX_MS]. Activity that outgrows the clamp is reached by
+ * panning rather than by zooming out.
+ * @param spans - every span considered.
+ * @param now - the instant the viewport is centred on.
+ * @returns the viewport duration in milliseconds.
+ */
+export function autoViewportMs(spans: readonly TaskSpan[], now: number): number {
+  const { earliest, latest } = recentBounds(spans, now)
+  if (earliest === Number.POSITIVE_INFINITY) return IDLE_VIEWPORT_MS
   const reach = Math.max(latest, now) - earliest
   const padded = reach * (1 + PAD_FRACTION * 2)
-  const length = Math.min(MAX_WINDOW_MS, Math.max(MIN_WINDOW_MS, padded))
-  return { from: now - length, to: now }
+  return Math.min(AUTO_MAX_MS, Math.max(AUTO_MIN_MS, padded))
+}
+
+/**
+ * Compute the scrollable extent around a centred `now`.
+ *
+ * The left edge is anchored to real activity, so panning into history never
+ * slides under the reader as the clock advances; it falls back to half a
+ * viewport before now when there is nothing older to show. The right edge is
+ * quantised, so the track does not grow on every clock tick.
+ * @param spans - every span considered.
+ * @param now - the instant the viewport is centred on.
+ * @param viewportMs - the resolved viewport duration.
+ * @returns content bounds in Unix epoch milliseconds.
+ */
+export function contentExtent(
+  spans: readonly TaskSpan[],
+  now: number,
+  viewportMs: number,
+): { readonly from: number; readonly to: number } {
+  const pad = Math.max(MIN_PAD_MS, viewportMs * PAD_FRACTION)
+  const half = viewportMs / 2
+  const { earliest, latest } = recentBounds(spans, now)
+  const left = Number.isFinite(earliest) ? Math.min(earliest, now - half) : now - half
+  const quantum = Math.max(MIN_PAD_MS, viewportMs / 64)
+  const right = Math.ceil((Math.max(now, latest) + half + pad) / quantum) * quantum
+  return { from: left - pad, to: right }
 }
 
 /**
  * Build one frame of the timeline.
  * @param input - workspaces, Session list, statuses, clock, and filters.
- * @returns the window, lanes, and the Sessions still needing a projection read.
+ * @returns the content extent, lanes, and the Sessions still needing a projection read.
  */
 export function buildTimeline(input: TimelineInput): TimelineModel {
-  const { workspaces, list, statuses, now, windowMs, includeSubagents } = input
+  const { workspaces, list, statuses, now, viewportMs, includeSubagents } = input
 
   interface Candidate {
     readonly sessionId: SessionId
@@ -218,26 +260,23 @@ export function buildTimeline(input: TimelineInput): TimelineModel {
     })
   }
 
-  const fit = windowMs === undefined
-    ? fitWindow(all.flatMap(candidate => candidate.spans), now)
-    : { from: now - windowMs, to: now }
+  const everySpan = all.flatMap(candidate => candidate.spans)
+  const resolvedViewport = viewportMs ?? autoViewportMs(everySpan, now)
+  const content = contentExtent(everySpan, now, resolvedViewport)
 
   const lanes = new Map<WorkspaceId, TimelineTask[]>()
   for (const candidate of all) {
     const visible: TaskSpan[] = []
     for (const [start, end] of candidate.spans) {
-      if (end < fit.from || start > fit.to) continue
-      visible.push([Math.max(start, fit.from), Math.min(end, fit.to)])
+      if (end < content.from || start > content.to) continue
+      visible.push([Math.max(start, content.from), Math.min(end, content.to)])
     }
     if (visible.length === 0) continue
-    const first = candidate.spans[0]
     const last = candidate.spans[candidate.spans.length - 1]
     const row: TimelineTask = {
       sessionId: candidate.sessionId,
       title: candidate.title,
       spans: visible,
-      clippedStart: first !== undefined && first[0] < fit.from,
-      clippedEnd: last !== undefined && last[1] > fit.to,
       phase: taskPhase(candidate.loaded ? snapshotPhase(list, candidate.sessionId) : 'idle', candidate.status),
       running: candidate.running,
       unread: candidate.status?.completionUnread === true,
@@ -265,8 +304,9 @@ export function buildTimeline(input: TimelineInput): TimelineModel {
   built.sort((left, right) => right.latest - left.latest)
 
   return {
-    from: fit.from,
-    to: fit.to,
+    contentFrom: content.from,
+    contentTo: content.to,
+    viewportMs: resolvedViewport,
     lanes: built,
     unloaded,
     hiddenTasks,
@@ -281,19 +321,30 @@ function snapshotPhase(list: SessionListState, sessionId: SessionId): WorkPhase 
 }
 
 /**
- * Position a span inside the window as a percentage of its width.
- * @param span - clipped span to place.
- * @param from - window left edge.
- * @param to - window right edge.
- * @returns left offset and width as fractions in [0, 1].
+ * Place one span on the track, in pixels from the content's left edge.
+ * @param span - span clipped to the content extent.
+ * @param contentFrom - content left edge.
+ * @param pxPerMs - current time scale.
+ * @returns the span's offset and width in CSS pixels.
  */
-export function spanGeometry(
+export function spanOffset(
   span: TaskSpan,
-  from: number,
-  to: number,
-): { readonly left: number; readonly width: number } {
-  const width = Math.max(1, to - from)
-  const left = (span[0] - from) / width
-  const right = (span[1] - from) / width
-  return { left, width: Math.max(right - left, 0.0015) }
+  contentFrom: number,
+  pxPerMs: number,
+): { readonly leftPx: number; readonly widthPx: number } {
+  const leftPx = (span[0] - contentFrom) * pxPerMs
+  const widthPx = Math.max((span[1] - span[0]) * pxPerMs, 3)
+  return { leftPx, widthPx }
+}
+
+/**
+ * Horizontal scroll offset that puts an instant at the middle of the viewport.
+ * @param at - the instant to centre.
+ * @param contentFrom - content left edge.
+ * @param pxPerMs - current time scale.
+ * @param viewportPx - width of the visible track.
+ * @returns the scroll offset, never negative.
+ */
+export function centerOffset(at: number, contentFrom: number, pxPerMs: number, viewportPx: number): number {
+  return Math.max(0, (at - contentFrom) * pxPerMs - viewportPx / 2)
 }

@@ -49,6 +49,21 @@
   color: var(--dsw-alias-label-tertiary);
 }
 
+.liveButton {
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--dsw-alias-brand-text);
+  cursor: pointer;
+  background: var(--dsw-alias-bg-layer-2);
+  border: 0;
+  border-radius: var(--dsw-radius-sm);
+}
+
+.liveButton:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
 .segment {
   display: flex;
   gap: 2px;
@@ -87,21 +102,43 @@
   overflow: auto;
 }
 
+/*
+ * The track is as wide as the content extent needs at the current scale, so the
+ * reader pans it with the ordinary scrollbar. Both the axis and the label column
+ * stay put: the axis pins to the top, the labels pin to the left.
+ */
 .grid {
+  position: relative;
   display: grid;
-  grid-template-columns: var(--task-label-width) minmax(0, 1fr);
-  min-width: 0;
+  grid-template-columns: var(--task-label-width) var(--task-track-width);
+  width: max-content;
+  min-width: 100%;
+}
+
+/* Grid lines are one repeating gradient per cell, aligned to the axis ticks, so
+   a wide content extent costs no extra nodes. The step and origin arrive as
+   custom properties from the panel, computed from the same tick list the axis
+   renders — the two cannot drift. */
+.ticked {
+  background-image: repeating-linear-gradient(
+    to right,
+    var(--dsw-alias-border-l2) 0 0.5px,
+    transparent 0.5px var(--task-tick-step)
+  );
+  background-position: var(--task-tick-origin) 0;
 }
 
 .axisRow {
   position: sticky;
   top: 0;
-  z-index: 2;
+  z-index: 3;
   background: var(--dsw-alias-bg-base);
   border-bottom: 0.5px solid var(--dsw-alias-border-l2);
 }
 
 .axisLabel {
+  left: 0;
+  z-index: 4;
   display: flex;
   align-items: center;
   padding: 0 12px;
@@ -110,10 +147,9 @@
   border-right: 0.5px solid var(--dsw-alias-border-l2);
 }
 
-.track {
+.axisTrack {
   position: relative;
   height: 28px;
-  overflow: hidden;
 }
 
 .tick {
@@ -134,12 +170,24 @@
   white-space: nowrap;
 }
 
-.nowLine {
+.nowNeedle {
   position: absolute;
   top: 0;
   bottom: 0;
   left: var(--task-left);
   border-left: 1px solid var(--dsw-alias-brand-primary);
+}
+
+/* The cursor continues down the rows, under the pinned label column. */
+.nowLine {
+  position: absolute;
+  top: 28px;
+  bottom: 0;
+  left: var(--task-left);
+  z-index: 1;
+  border-left: 0.5px solid var(--dsw-alias-brand-primary);
+  opacity: 0.4;
+  pointer-events: none;
 }
 
 /* ── lanes ───────────────────────────────────────────────────────────────── */
@@ -149,6 +197,9 @@
 }
 
 .laneTitle {
+  position: sticky;
+  left: 0;
+  z-index: 2;
   display: flex;
   gap: 6px;
   align-items: center;
@@ -159,7 +210,7 @@
 }
 
 .laneTrack {
-  background: var(--dsw-alias-bg-layer-2);
+  background-color: var(--dsw-alias-bg-layer-2);
   border-bottom: 0.5px solid var(--dsw-alias-border-l1);
 }
 
@@ -226,11 +277,15 @@
 }
 
 .rowLabel {
+  position: sticky;
+  left: 0;
+  z-index: 2;
   display: flex;
   gap: 6px;
   align-items: center;
   min-width: 0;
   padding: 0 12px 0 28px;
+  background: var(--dsw-alias-bg-base);
   border-right: 0.5px solid var(--dsw-alias-border-l2);
   border-bottom: 0.5px solid var(--dsw-alias-border-l1);
 }
@@ -282,15 +337,7 @@
 }
 
 .rowTrack:hover {
-  background: var(--dsw-alias-interactive-bg-hover);
-}
-
-.gridLine {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: var(--task-left);
-  border-left: 0.5px solid var(--dsw-alias-border-l1);
+  background-color: var(--dsw-alias-interactive-bg-hover);
 }
 
 /* ── bars ────────────────────────────────────────────────────────────────── */
@@ -322,16 +369,6 @@
   background: var(--task-bar);
   border-radius: var(--dsw-radius-xs);
   transform: translateY(-50%);
-}
-
-.bar[data-clipped-start='true'] {
-  border-top-left-radius: 0;
-  border-bottom-left-radius: 0;
-}
-
-.bar[data-clipped-end='true'] {
-  border-top-right-radius: 0;
-  border-bottom-right-radius: 0;
 }
 
 /* An open right edge is the "still working" cue; the halo carries the pulse. */

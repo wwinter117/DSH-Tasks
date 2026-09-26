@@ -4,18 +4,21 @@ import type { SessionStatus, SessionStatusSnapshot } from '@deepseek-ai/dsh-clie
 import type { WorkspaceId, WorkspaceView } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import {
-  IDLE_WINDOW_MS,
+  AUTO_MAX_MS,
+  AUTO_MIN_MS,
+  IDLE_VIEWPORT_MS,
   LOOKBACK_MS,
-  MAX_WINDOW_MS,
-  MIN_WINDOW_MS,
+  autoViewportMs,
   buildTimeline,
-  fitWindow,
-  spanGeometry,
+  centerOffset,
+  contentExtent,
+  spanOffset,
   taskPhase,
 } from '../src/client/model.ts'
 import { PROJECTION_KEY, type TaskSpan, type WorkPhase } from '../src/contract.ts'
 
 const NOW = 1_700_000_000_000
+const HOUR = 3_600_000
 
 const sid = (name: string): SessionId => name as SessionId
 const wid = (name: string): WorkspaceId => name as WorkspaceId
@@ -74,31 +77,93 @@ function status(id: string, value: SessionStatus): SessionStatusSnapshot {
   return new Map([[sid(id), value]])
 }
 
-describe('fitWindow', () => {
-  it('falls back to the idle window when nothing happened', () => {
-    expect(fitWindow([], NOW)).toEqual({ from: NOW - IDLE_WINDOW_MS, to: NOW })
+const RECENT: TaskSpan = [NOW - HOUR, NOW - 60_000]
+
+describe('autoViewportMs', () => {
+  it('falls back to the idle viewport when nothing happened', () => {
+    expect(autoViewportMs([], NOW)).toBe(IDLE_VIEWPORT_MS)
   })
 
   it('ignores activity older than the lookback', () => {
     const stale: TaskSpan = [NOW - LOOKBACK_MS - 60_000, NOW - LOOKBACK_MS - 30_000]
-    expect(fitWindow([stale], NOW)).toEqual({ from: NOW - IDLE_WINDOW_MS, to: NOW })
+    expect(autoViewportMs([stale], NOW)).toBe(IDLE_VIEWPORT_MS)
   })
 
-  it('covers recent activity with padding', () => {
-    const from = fitWindow([[NOW - 3_600_000, NOW - 60_000]], NOW)
-    expect(from.to).toBe(NOW)
-    expect(from.from).toBeLessThan(NOW - 3_600_000)
-    expect(from.from).toBeGreaterThan(NOW - 6 * 3_600_000)
+  it('covers a recent reach with padding', () => {
+    const reach = HOUR
+    const viewport = autoViewportMs([[NOW - reach, NOW - 60_000]], NOW)
+    expect(viewport).toBeGreaterThan(reach)
+    expect(viewport).toBeLessThan(AUTO_MAX_MS)
   })
 
-  it('never exceeds the maximum window', () => {
-    const from = fitWindow([[NOW - 10 * 24 * 3_600_000, NOW]], NOW)
-    expect(from.to - from.from).toBe(MAX_WINDOW_MS)
+  it('never zooms in past the minimum', () => {
+    expect(autoViewportMs([[NOW - 1000, NOW]], NOW)).toBe(AUTO_MIN_MS)
   })
 
-  it('never shrinks below the minimum window', () => {
-    const from = fitWindow([[NOW - 1000, NOW]], NOW)
-    expect(from.to - from.from).toBe(MIN_WINDOW_MS)
+  it('never zooms out past the maximum, however far activity reaches', () => {
+    expect(autoViewportMs([[NOW - LOOKBACK_MS + 1000, NOW]], NOW)).toBe(AUTO_MAX_MS)
+  })
+})
+
+describe('contentExtent', () => {
+  const viewport = HOUR
+
+  it('anchors the left edge on real activity', () => {
+    const extent = contentExtent([[NOW - 5 * HOUR, NOW - 4 * HOUR]], NOW, viewport)
+    expect(extent.from).toBeLessThan(NOW - 5 * HOUR)
+  })
+
+  it('keeps half a viewport to the left when there is nothing older', () => {
+    const extent = contentExtent([[NOW - 60_000, NOW]], NOW, viewport)
+    expect(extent.from).toBeLessThanOrEqual(NOW - viewport / 2)
+  })
+
+  it('always leaves room to centre now', () => {
+    for (const spans of [[], [[NOW - 60_000, NOW]], [[NOW - 9 * HOUR, NOW - 8 * HOUR]]] as TaskSpan[][]) {
+      const extent = contentExtent(spans, NOW, viewport)
+      expect(extent.to).toBeGreaterThanOrEqual(NOW + viewport / 2)
+      expect(extent.from).toBeLessThanOrEqual(NOW - viewport / 2)
+    }
+  })
+
+  it('quantises the right edge so the track stops growing every second', () => {
+    const extent = contentExtent([[NOW - 60_000, NOW]], NOW, viewport)
+    const quantum = Math.max(60_000, viewport / 64)
+    expect(extent.to % quantum).toBe(0)
+  })
+
+  it('widens with the viewport, since half of it sits past now', () => {
+    const narrow = contentExtent([], NOW, HOUR)
+    const wide = contentExtent([], NOW, 6 * HOUR)
+    expect(wide.to - wide.from).toBeGreaterThan(narrow.to - narrow.from)
+  })
+})
+
+describe('centerOffset', () => {
+  const contentFrom = NOW - 4 * HOUR
+  const pxPerMs = 900 / HOUR
+
+  it('puts the instant at the middle of the viewport', () => {
+    const offset = centerOffset(NOW, contentFrom, pxPerMs, 900)
+    expect(offset).toBe((NOW - contentFrom) * pxPerMs - 450)
+  })
+
+  it('never scrolls before the content starts', () => {
+    expect(centerOffset(contentFrom, contentFrom, pxPerMs, 900)).toBe(0)
+  })
+})
+
+describe('spanOffset', () => {
+  const pxPerMs = 900 / HOUR
+
+  it('places a span in pixels from the content origin', () => {
+    const from = NOW - 4 * HOUR
+    expect(spanOffset([from, from + HOUR], from, pxPerMs)).toEqual({ leftPx: 0, widthPx: 900 })
+  })
+
+  it('keeps a hairline width for a zero-length span', () => {
+    const from = NOW - HOUR
+    expect(spanOffset([NOW, NOW], from, pxPerMs).widthPx).toBe(3)
   })
 })
 
@@ -135,208 +200,132 @@ describe('taskPhase', () => {
   })
 })
 
-describe('spanGeometry', () => {
-  it('places a full-window span across the track', () => {
-    expect(spanGeometry([NOW - 1000, NOW], NOW - 1000, NOW)).toEqual({ left: 0, width: 1 })
-  })
-
-  it('keeps a hairline width for a zero-length span', () => {
-    const geometry = spanGeometry([NOW, NOW], NOW - 1000, NOW)
-    expect(geometry.width).toBeGreaterThan(0)
-    expect(geometry.width).toBeLessThan(0.01)
-  })
-})
-
 describe('buildTimeline', () => {
   const workspaces = [workspace('w1', '/repo/one', 'One'), workspace('w2', '/repo/two', 'Two')]
-  const recent: TaskSpan = [NOW - 3_600_000, NOW - 60_000]
+
+  const build = (
+    rows: readonly SessionSummary[],
+    projections: Readonly<Record<string, SessionProjectionSnapshot>> = {},
+    overrides: Partial<Parameters<typeof buildTimeline>[0]> = {},
+  ) => buildTimeline({
+    workspaces,
+    list: list(rows, projections),
+    statuses: new Map(),
+    now: NOW,
+    viewportMs: HOUR,
+    includeSubagents: false,
+    ...overrides,
+  })
 
   it('groups Sessions into their workspace lane by canonical cwd', () => {
-    const model = buildTimeline({
-      workspaces,
-      list: list(
-        [summary('a', '/repo/one', { displayTitle: 'Alpha' }), summary('b', '/repo/two', { displayTitle: 'Beta' })],
-        { a: loaded([recent], 'tool'), b: loaded([recent], 'idle') },
-      ),
-      statuses: new Map(),
-      now: NOW,
-      windowMs: undefined,
-      includeSubagents: false,
-    })
+    const model = build(
+      [summary('a', '/repo/one', { displayTitle: 'Alpha' }), summary('b', '/repo/two', { displayTitle: 'Beta' })],
+      { a: loaded([RECENT], 'tool'), b: loaded([RECENT], 'idle') },
+    )
     expect(model.lanes.map(lane => lane.title)).toEqual(['One', 'Two'])
     expect(model.lanes[0]?.tasks[0]?.title).toBe('Alpha')
   })
 
+  it('resolves the automatic zoom when no fixed one is given', () => {
+    const auto = build([summary('a', '/repo/one')], { a: loaded([RECENT]) }, { viewportMs: undefined })
+    expect(auto.viewportMs).toBeGreaterThanOrEqual(AUTO_MIN_MS)
+    expect(auto.viewportMs).toBeLessThanOrEqual(AUTO_MAX_MS)
+  })
+
+  it('reports the content extent it clipped the rows to', () => {
+    const model = build([summary('a', '/repo/one')], { a: loaded([RECENT]) })
+    expect(model.contentTo).toBeGreaterThan(model.contentFrom)
+    expect(model.contentFrom).toBeLessThan(RECENT[0])
+  })
+
   it('hides subagent Sessions by default and counts them', () => {
-    const model = buildTimeline({
-      workspaces,
-      list: list(
-        [summary('a', '/repo/one'), summary('child', '/repo/one', { origin: 'subagent' })],
-        { a: loaded([recent]), child: loaded([recent]) },
-      ),
-      statuses: new Map(),
-      now: NOW,
-      windowMs: undefined,
-      includeSubagents: false,
-    })
+    const model = build(
+      [summary('a', '/repo/one'), summary('child', '/repo/one', { origin: 'subagent' })],
+      { a: loaded([RECENT]), child: loaded([RECENT]) },
+    )
     expect(model.hiddenTasks).toBe(1)
     expect(model.lanes[0]?.tasks).toHaveLength(1)
   })
 
   it('shows subagent Sessions when asked', () => {
-    const model = buildTimeline({
-      workspaces,
-      list: list(
-        [summary('a', '/repo/one'), summary('child', '/repo/one', { origin: 'subagent' })],
-        { a: loaded([recent]), child: loaded([recent]) },
-      ),
-      statuses: new Map(),
-      now: NOW,
-      windowMs: undefined,
-      includeSubagents: true,
-    })
+    const model = build(
+      [summary('a', '/repo/one'), summary('child', '/repo/one', { origin: 'subagent' })],
+      { a: loaded([RECENT]), child: loaded([RECENT]) },
+      { includeSubagents: true },
+    )
     expect(model.hiddenTasks).toBe(0)
     expect(model.lanes[0]?.tasks).toHaveLength(2)
   })
 
-  it('clips a span to the window and flags the clipped edges', () => {
-    const model = buildTimeline({
-      workspaces,
-      list: list([summary('a', '/repo/one')], {
-        a: loaded([[NOW - 10 * 3_600_000, NOW - 9 * 3_600_000], [NOW - 120_000, NOW]]),
-      }),
-      statuses: new Map(),
-      now: NOW,
-      windowMs: 3_600_000,
-      includeSubagents: false,
+  it('keeps every interval of a Session that has an older stretch too', () => {
+    const model = build([summary('a', '/repo/one')], {
+      a: loaded([[NOW - 9 * HOUR, NOW - 8 * HOUR], RECENT]),
     })
-    const task = model.lanes[0]?.tasks[0]
-    expect(task?.spans).toHaveLength(1)
-    expect(task?.clippedStart).toBe(true)
+    expect(model.lanes[0]?.tasks[0]?.spans).toHaveLength(2)
   })
 
-  it('drops Sessions whose activity falls outside the window', () => {
-    const model = buildTimeline({
-      workspaces,
-      list: list([summary('old', '/repo/one', { updatedAt: NOW - LOOKBACK_MS - 1 })], {
-        old: loaded([[NOW - 3 * 3_600_000, NOW - 2 * 3_600_000]]),
-      }),
-      statuses: new Map(),
-      now: NOW,
-      windowMs: 60 * 60 * 1000,
-      includeSubagents: false,
-    })
+  it('drops Sessions whose activity is older than the lookback', () => {
+    const stale = summary('old', '/repo/one', { updatedAt: NOW - LOOKBACK_MS - 1 })
+    const model = build([stale], { old: loaded([[NOW - 30 * HOUR, NOW - 29 * HOUR]]) })
     expect(model.lanes).toHaveLength(0)
     expect(model.hiddenWorkspaces).toBe(2)
   })
 
   it('requests a projection read for a recent Session that has no row yet', () => {
-    const model = buildTimeline({
-      workspaces,
-      list: list([summary('a', '/repo/one')], {}),
-      statuses: new Map(),
-      now: NOW,
-      windowMs: undefined,
-      includeSubagents: false,
-    })
-    expect(model.unloaded).toEqual([sid('a')])
+    expect(build([summary('a', '/repo/one')]).unloaded).toEqual([sid('a')])
   })
 
   it('does not request a read for a Session that already has a row', () => {
-    const model = buildTimeline({
-      workspaces,
-      list: list([summary('a', '/repo/one')], { a: loaded([recent]) }),
-      statuses: new Map(),
-      now: NOW,
-      windowMs: undefined,
-      includeSubagents: false,
-    })
-    expect(model.unloaded).toEqual([])
+    expect(build([summary('a', '/repo/one')], { a: loaded([RECENT]) }).unloaded).toEqual([])
   })
 
   it('does not request a read for a Session older than the lookback', () => {
-    const model = buildTimeline({
-      workspaces,
-      list: list([summary('a', '/repo/one', { updatedAt: NOW - LOOKBACK_MS - 1 })], {}),
-      statuses: new Map(),
-      now: NOW,
-      windowMs: undefined,
-      includeSubagents: false,
-    })
-    expect(model.unloaded).toEqual([])
+    expect(build([summary('a', '/repo/one', { updatedAt: NOW - LOOKBACK_MS - 1 })]).unloaded).toEqual([])
   })
 
   it('requests a running Session even when its prompt is old', () => {
-    const model = buildTimeline({
-      workspaces,
-      list: list([summary('a', '/repo/one', { updatedAt: NOW - LOOKBACK_MS - 1 })]),
-      statuses: status('a', { running: true, pendingInteraction: undefined, completionUnread: false }),
-      now: NOW,
-      windowMs: undefined,
-      includeSubagents: false,
-    })
+    const model = build(
+      [summary('a', '/repo/one', { updatedAt: NOW - LOOKBACK_MS - 1 })],
+      {},
+      { statuses: status('a', { running: true, pendingInteraction: undefined, completionUnread: false }) },
+    )
     expect(model.unloaded).toEqual([sid('a')])
   })
 
   it('orders tasks newest activity first and lanes by their newest task', () => {
-    const older: TaskSpan = [NOW - 7_200_000, NOW - 7_000_000]
-    const model = buildTimeline({
-      workspaces,
-      list: list(
-        [
-          summary('older', '/repo/one', { displayTitle: 'Older' }),
-          summary('newer', '/repo/one', { displayTitle: 'Newer' }),
-          summary('other', '/repo/two', { displayTitle: 'Other' }),
-        ],
-        {
-          older: loaded([older]),
-          newer: loaded([recent]),
-          other: loaded([[NOW - 10 * 3_600_000, NOW - 9 * 3_600_000]]),
-        },
-      ),
-      statuses: new Map(),
-      now: NOW,
-      windowMs: 12 * 3_600_000,
-      includeSubagents: false,
-    })
+    const model = build(
+      [
+        summary('older', '/repo/one', { displayTitle: 'Older' }),
+        summary('newer', '/repo/one', { displayTitle: 'Newer' }),
+        summary('other', '/repo/two', { displayTitle: 'Other' }),
+      ],
+      {
+        older: loaded([[NOW - 3 * HOUR, NOW - 2 * HOUR]]),
+        newer: loaded([RECENT]),
+        other: loaded([[NOW - 4 * HOUR, NOW - 3 * HOUR]]),
+      },
+      { viewportMs: 6 * HOUR },
+    )
     expect(model.lanes[0]?.title).toBe('One')
     expect(model.lanes[0]?.tasks.map(task => task.title)).toEqual(['Newer', 'Older'])
   })
 
   it('carries the unread mark from the UI status', () => {
-    const model = buildTimeline({
-      workspaces,
-      list: list([summary('a', '/repo/one')], { a: loaded([recent]) }),
-      statuses: status('a', { running: false, pendingInteraction: undefined, completionUnread: true }),
-      now: NOW,
-      windowMs: undefined,
-      includeSubagents: false,
-    })
+    const model = build(
+      [summary('a', '/repo/one')],
+      { a: loaded([RECENT]) },
+      { statuses: status('a', { running: false, pendingInteraction: undefined, completionUnread: true }) },
+    )
     expect(model.lanes[0]?.tasks[0]?.unread).toBe(true)
     expect(model.lanes[0]?.tasks[0]?.phase).toBe('idle')
   })
 
   it('skips a Session whose cwd matches no workspace', () => {
-    const model = buildTimeline({
-      workspaces,
-      list: list([summary('a', '/repo/nowhere')], { a: loaded([recent]) }),
-      statuses: new Map(),
-      now: NOW,
-      windowMs: undefined,
-      includeSubagents: false,
-    })
-    expect(model.lanes).toHaveLength(0)
+    expect(build([summary('a', '/repo/nowhere')], { a: loaded([RECENT]) }).lanes).toHaveLength(0)
   })
 
   it('labels a row with the client row display title', () => {
-    const model = buildTimeline({
-      workspaces,
-      list: list([summary('a', '/repo/one', { displayTitle: 'Named task' })], { a: loaded([recent]) }),
-      statuses: new Map(),
-      now: NOW,
-      windowMs: undefined,
-      includeSubagents: false,
-    })
+    const model = build([summary('a', '/repo/one', { displayTitle: 'Named task' })], { a: loaded([RECENT]) })
     expect(model.lanes[0]?.tasks[0]?.title).toBe('Named task')
   })
 })

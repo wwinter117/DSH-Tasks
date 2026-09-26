@@ -13,7 +13,7 @@ Every DSH Session is a task. The timeline draws each one as a row on a wall-cloc
 - **One row per Session, grouped under its workspace.** Sessions with activity inside the drawn window appear; empty workspaces collapse away.
 - **Real work segments, not session age.** A row is a set of intervals folded from the Session's own event log, so a task worked on all morning reads as segments across the morning rather than one long bar. A faint summary bar spans first-to-last activity.
 - **Six phases, live.** `idle` · `generating` · `running a tool` · `waiting on a subtask` · `waiting for your approval` · `waiting for your answer`. The two waiting phases are the ones that need you, and a running row keeps an open, pulsing right edge.
-- **An automatic time window.** The right edge is always *now*; the length tracks recent activity, clamped between 15 minutes and 24 hours. Fixed 1h / 6h / 24h windows are one click away.
+- **Now sits in the middle, and the track slides under it.** The live cursor is centred on load, so history is a drag away in either direction and the clock keeps it there. Zoom chooses how much time the viewport shows — automatic, or a fixed 1 / 6 / 24 hours. Panning stops the follow; **Back to now** re-centres it.
 - **Detail on click.** Workspace, phase, last activity, last prompt, and every recorded segment with its duration, plus a button that opens the Session.
 - **Insert a task by clicking a workspace.** The `+` on a lane header starts a new Session in that workspace and takes you to its composer.
 
@@ -75,7 +75,8 @@ Why the intervals are computed on the host, why the window is automatic, and whi
 - **The last activity time is second-resolution.** The published end of the open segment is floored to a one-second grid, which is what keeps publication cheap.
 - **`waiting` phases need a connected client.** The blocking-approval and question phases come from client UI status; the log alone cannot tell them apart from work in progress.
 - **Subagent Sessions are hidden by default.** Forks are not: a fork is a task in its own right. The filter matches the workspace tree's own `origin === 'subagent'` rule.
-- **A window is capped at 24 hours.** Longer history is a matter of opening older Sessions, not of zooming out.
+- **The track reaches back 24 hours.** Sessions whose only activity is older than that leave the timeline; open the Session itself for anything earlier.
+- **The automatic zoom stops at 6 hours.** Activity that reaches further is reached by panning rather than by zooming out, and half of every viewport sits to the right of now — that empty future is the price of centring the cursor.
 - **No virtualisation.** The default filters and the 24-hour cap keep rendered rows in the low hundreds; a full-history mode would need `@tanstack/react-virtual`.
 
 ## Development
