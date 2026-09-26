@@ -46,7 +46,7 @@ Then append to `~/.dsh/profiles/web/cordis.patch.yml`:
 
 `dsh web` watches the profile's patch file and manifest, so the row applies without a restart.
 
-**Then reload the browser page.** A client row that entered the boot graph after the page loaded is not picked up by the client's hot-reload path — it only swaps bundles it already knows. One refresh adds the sidebar entry.
+Nothing else is needed: the page reconciles the client entry graph as it changes, so the sidebar entry appears in an already-open page. If it does not, reload the page once.
 
 If the panel appears but every row is empty, the host half is still the module the process imported first: a plugin is imported once per process, and a rebuilt `lib/index.js` at the same path can be served from Node's ESM cache. Restart `dsh web`. A working host half shows activity segments; a stale one shows rows with no bars.
 
