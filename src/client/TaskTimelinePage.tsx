@@ -3,7 +3,10 @@
  * wall-clock axis that pans horizontally under a centred live cursor.
  * @module dsh-tasks/client/TaskTimelinePage
  */
-import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import {
+  Fragment, useEffect, useMemo, useRef, useState,
+  type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent,
+} from 'react'
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { WorkspaceId } from '@deepseek-ai/dsh-api-workspace-controller/client'
@@ -11,6 +14,10 @@ import {
   buildTimeline, centerOffset, spanOffset, VIEWPORT_PRESETS,
   type TasksTranslate, type ViewportPresetId,
 } from './model.ts'
+import {
+  DENSITIES, clampLabelWidth, densityOf, loadPreferences, savePreferences,
+  type DensityId, type ViewPreferences,
+} from './preferences.ts'
 import { TaskDetail } from './TaskDetail.tsx'
 import { formatClock, formatTick, tickStep, ticks } from './format.ts'
 import { PHASE_CLASS } from './phase-style.ts'
@@ -33,6 +40,22 @@ export type TaskTimelinePageProps =
   & PropsLocale<'dsh-tasks'>
   & TimelineInjected
 
+/** Locale key naming each row-height preset. */
+const DENSITY_KEY: Readonly<Record<DensityId, TasksKey>> = {
+  compact: 'density.compact',
+  cosy: 'density.cosy',
+  roomy: 'density.roomy',
+}
+
+/** One lane's drop state while the reader drags its handle. */
+interface LaneDrag {
+  readonly id: WorkspaceId
+  /** Lane the pointer is over. */
+  readonly over: WorkspaceId
+  /** Whether the dragged lane would land after it. */
+  readonly after: boolean
+}
+
 /** Locale key naming each zoom preset. */
 const VIEWPORT_KEY: Readonly<Record<ViewportPresetId, TasksKey>> = {
   auto: 'zoom.auto',
@@ -40,9 +63,6 @@ const VIEWPORT_KEY: Readonly<Record<ViewportPresetId, TasksKey>> = {
   '6h': 'zoom.6h',
   '24h': 'zoom.24h',
 }
-
-/** Width of the sticky label column; the grid template and measurement share it. */
-const LABEL_COLUMN_PX = 260
 
 /** Track width assumed before the first measurement. */
 const FALLBACK_TRACK_PX = 900
@@ -70,6 +90,7 @@ export function TaskTimelinePage(props: TaskTimelinePageProps) {
   const sessions = useSessions(snapshot => snapshot)
   const statuses = useSessionStatus(snapshot => snapshot)
 
+  const [prefs, setPrefs] = useState<ViewPreferences>(loadPreferences)
   const [presetId, setPresetId] = useState<ViewportPresetId>('auto')
   const [includeSubagents, setIncludeSubagents] = useState(false)
   const [selected, setSelected] = useState<SessionId | undefined>(undefined)
@@ -78,14 +99,52 @@ export function TaskTimelinePage(props: TaskTimelinePageProps) {
   const [now, setNow] = useState(() => Date.now())
   const [following, setFollowing] = useState(true)
 
+  const [anchor, setAnchor] = useState<number | undefined>(undefined)
+  const [drag, setDrag] = useState<LaneDrag | undefined>(undefined)
+
   const canvas = useRef<HTMLDivElement | null>(null)
+  const grid = useRef<HTMLDivElement | null>(null)
   const gestureAt = useRef(0)
+  // The order currently on screen. Feeding it back into the next build is what
+  // keeps rows and lanes from reshuffling every time a Session emits an event.
+  const shown = useRef<{ lanes: readonly string[]; tasks: Record<string, readonly string[]> }>({ lanes: [], tasks: {} })
+  const laneRects = useRef<readonly { id: WorkspaceId; top: number; bottom: number }[]>([])
+  const resizeStart = useRef<{ x: number; width: number } | undefined>(undefined)
+
+  const labelWidth = prefs.labelWidth
+  const density = densityOf(prefs.density)
+
+  useEffect(() => {
+    // Coalesces the stream of widths a drag produces, and keeps a fast unmount
+    // from writing on every frame.
+    const timer = setTimeout(() => { savePreferences(prefs) }, 250)
+    return () => { clearTimeout(timer) }
+  }, [prefs])
 
   const viewportMs = VIEWPORT_PRESETS.find(preset => preset.id === presetId)?.ms
+  const laneOrder = prefs.laneOrder ?? shown.current.lanes
+  const taskOrder = shown.current.tasks
   const model = useMemo(
-    () => buildTimeline({ workspaces, list: sessions, statuses, now, viewportMs, includeSubagents }),
-    [workspaces, sessions, statuses, now, viewportMs, includeSubagents],
+    () => buildTimeline({
+      workspaces, list: sessions, statuses, now, viewportMs, includeSubagents,
+      contentAnchor: anchor, laneOrder, taskOrder,
+    }),
+    [workspaces, sessions, statuses, now, viewportMs, includeSubagents, anchor, laneOrder, taskOrder],
   )
+
+  useEffect(() => {
+    const tasks: Record<string, readonly string[]> = {}
+    for (const lane of model.lanes) tasks[lane.workspaceId] = lane.tasks.map(task => task.sessionId)
+    shown.current = { lanes: model.lanes.map(lane => lane.workspaceId), tasks }
+  }, [model])
+
+  useEffect(() => {
+    // A zoom the reader chose is a new frame of reference; the old anchor would
+    // pin it to the previous scale.
+    setAnchor(undefined)
+  }, [presetId])
+
+  useEffect(() => { setAnchor(model.contentAnchor) }, [model.contentAnchor])
 
   const anyRunning = model.lanes.some(lane => lane.tasks.some(task => task.running))
 
@@ -100,12 +159,12 @@ export function TaskTimelinePage(props: TaskTimelinePageProps) {
   useEffect(() => {
     const element = canvas.current
     if (element === null) return
-    const measure = (): void => { setTrackPx(Math.max(240, element.clientWidth - LABEL_COLUMN_PX)) }
+    const measure = (): void => { setTrackPx(Math.max(240, element.clientWidth - labelWidth)) }
     measure()
     const observer = new ResizeObserver(measure)
     observer.observe(element)
     return () => { observer.disconnect() }
-  }, [])
+  }, [labelWidth])
 
   const unloadedKey = model.unloaded.join('|')
   useEffect(() => {
@@ -131,6 +190,77 @@ export function TaskTimelinePage(props: TaskTimelinePageProps) {
 
   const onScroll = (): void => {
     if (Date.now() - gestureAt.current < GESTURE_WINDOW_MS) setFollowing(false)
+  }
+
+  /** Begin dragging the divider between the name column and the track. */
+  const startResize = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    resizeStart.current = { x: event.clientX, width: labelWidth }
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+
+  const moveResize = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    const start = resizeStart.current
+    if (start === undefined) return
+    setPrefs(current => ({ ...current, labelWidth: clampLabelWidth(start.width + event.clientX - start.x) }))
+  }
+
+  const endResize = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    resizeStart.current = undefined
+    event.currentTarget.releasePointerCapture(event.pointerId)
+  }
+
+  /** Arrow keys move the divider for a reader who cannot drag it. */
+  const keyResize = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
+    const step = event.key === 'ArrowLeft' ? -16 : event.key === 'ArrowRight' ? 16 : 0
+    if (step === 0) return
+    event.preventDefault()
+    setPrefs(current => ({ ...current, labelWidth: clampLabelWidth(current.labelWidth + step) }))
+  }
+
+  /** Begin dragging one lane to a new position. */
+  const startLaneDrag = (event: ReactPointerEvent<HTMLElement>, workspaceId: WorkspaceId): void => {
+    const element = grid.current
+    if (element === null) return
+    laneRects.current = [...element.querySelectorAll<HTMLElement>('[data-lane-header]')].map((header) => {
+      const rect = header.getBoundingClientRect()
+      return { id: (header.dataset.laneHeader ?? '') as WorkspaceId, top: rect.top, bottom: rect.bottom }
+    })
+    event.currentTarget.setPointerCapture(event.pointerId)
+    setDrag({ id: workspaceId, over: workspaceId, after: false })
+  }
+
+  const moveLaneDrag = (event: ReactPointerEvent<HTMLElement>): void => {
+    setDrag((current) => {
+      if (current === undefined) return current
+      const rects = laneRects.current
+      let over: WorkspaceId = current.over
+      let after = current.after
+      for (const rect of rects) {
+        if (event.clientY < rect.top || event.clientY > rect.bottom) continue
+        over = rect.id
+        after = event.clientY > (rect.top + rect.bottom) / 2
+        break
+      }
+      return over === current.over && after === current.after ? current : { ...current, over, after }
+    })
+  }
+
+  const endLaneDrag = (event: ReactPointerEvent<HTMLElement>): void => {
+    event.currentTarget.releasePointerCapture(event.pointerId)
+    const current = drag
+    setDrag(undefined)
+    if (current === undefined || current.over === current.id) return
+    const rest = model.lanes.map(lane => lane.workspaceId).filter(id => id !== current.id)
+    const at = rest.indexOf(current.over)
+    if (at === -1) return
+    rest.splice(current.after ? at + 1 : at, 0, current.id)
+    setPrefs(previous => ({ ...previous, laneOrder: rest }))
+  }
+
+  /** Drop the manual order and go back to ranking lanes by activity. */
+  const resetOrder = (): void => {
+    shown.current = { lanes: [], tasks: {} }
+    setPrefs(previous => ({ ...previous, laneOrder: undefined }))
   }
 
   const selectedTask = model.lanes
@@ -172,6 +302,23 @@ export function TaskTimelinePage(props: TaskTimelinePageProps) {
         </div>
 
         <div className={css.group}>
+          <span className={css.groupLabel}>{t('density.label')}</span>
+          <div className={css.segment}>
+            {DENSITIES.map(entry => (
+              <button
+                key={entry.id}
+                type="button"
+                className={css.segmentButton}
+                data-active={prefs.density === entry.id}
+                onClick={() => { setPrefs(current => ({ ...current, density: entry.id })) }}
+              >
+                {t(DENSITY_KEY[entry.id])}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className={css.group}>
           <span className={css.groupLabel}>{t('filter.label')}</span>
           <div className={css.segment}>
             <button
@@ -184,6 +331,12 @@ export function TaskTimelinePage(props: TaskTimelinePageProps) {
             </button>
           </div>
         </div>
+
+        {prefs.laneOrder !== undefined && (
+          <button type="button" className={css.liveButton} onClick={resetOrder}>
+            {t('order.reset')}
+          </button>
+        )}
       </div>
 
       {taskCount === 0
@@ -198,6 +351,7 @@ export function TaskTimelinePage(props: TaskTimelinePageProps) {
           </div>
         )
         : (
+          <div className={css.viewport}>
           <div
             className={css.canvas}
             ref={canvas}
@@ -207,8 +361,12 @@ export function TaskTimelinePage(props: TaskTimelinePageProps) {
           >
             <div
               className={css.grid}
+              ref={grid}
               style={vars({
-                '--task-label-width': `${LABEL_COLUMN_PX}px`,
+                '--task-label-width': `${labelWidth}px`,
+                '--task-row-height': `${density.rowPx}px`,
+                '--task-lane-height': `${density.lanePx}px`,
+                '--task-bar-height': `${density.barPx}px`,
                 '--task-track-width': `${trackWidthPx}px`,
                 '--task-tick-step': `${step * pxPerMs}px`,
                 '--task-tick-origin': `${firstMark === undefined ? 0 : (firstMark - model.contentFrom) * pxPerMs}px`,
@@ -240,7 +398,27 @@ export function TaskTimelinePage(props: TaskTimelinePageProps) {
                 const isCollapsed = collapsed.includes(lane.workspaceId)
                 return (
                   <Fragment key={lane.workspaceId}>
-                    <div className={css.laneTitle}>
+                    <div
+                      className={css.laneTitle}
+                      data-lane-header={lane.workspaceId}
+                      data-drop={drag === undefined || drag.over !== lane.workspaceId || drag.id === lane.workspaceId
+                        ? undefined
+                        : drag.after ? 'after' : 'before'}
+                      data-dragging={drag?.id === lane.workspaceId}
+                    >
+                      <span
+                        className={css.dragHandle}
+                        role="button"
+                        tabIndex={0}
+                        aria-label={t('lane.reorder', { workspace: lane.title })}
+                        title={t('lane.reorder', { workspace: lane.title })}
+                        onPointerDown={(event) => { startLaneDrag(event, lane.workspaceId) }}
+                        onPointerMove={moveLaneDrag}
+                        onPointerUp={endLaneDrag}
+                        onPointerCancel={endLaneDrag}
+                      >
+                        ⠿
+                      </span>
                       <button
                         type="button"
                         className={css.laneButton}
@@ -329,6 +507,20 @@ export function TaskTimelinePage(props: TaskTimelinePageProps) {
                 onOpen={openSession}
               />
             )}
+          </div>
+            <div
+              className={css.resizer}
+              style={vars({ '--task-label-width': `${labelWidth}px` })}
+              role="separator"
+              aria-orientation="vertical"
+              aria-label={t('column.resize')}
+              tabIndex={0}
+              onKeyDown={keyResize}
+              onPointerDown={startResize}
+              onPointerMove={moveResize}
+              onPointerUp={endResize}
+              onPointerCancel={endResize}
+            />
           </div>
         )}
     </div>

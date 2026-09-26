@@ -16,6 +16,8 @@ Every DSH Session is a task. The timeline draws each one as a row on a wall-cloc
 - **Now sits in the middle, and the track slides under it.** The live cursor is centred on load, so history is a drag away in either direction and the clock keeps it there. Zoom chooses how much time the viewport shows — automatic, or a fixed 1 / 6 / 24 hours. Panning stops the follow; **Back to now** re-centres it.
 - **Detail on click.** Workspace, phase, last activity, last prompt, and every recorded segment with its duration, plus a button that opens the Session.
 - **Insert a task by clicking a workspace.** The `+` on a lane header starts a new Session in that workspace and takes you to its composer.
+- **The board holds still.** Rows and lanes keep their positions while tasks run; only ones you have not seen before are appended. Drag a lane by its handle to reorder, and **Restore automatic order** puts them back in activity order.
+- **It fits how you read it.** Drag the divider to widen the name column (arrow keys work too), and pick a row height — compact, standard, or roomy. The panel remembers all three in this browser.
 
 ## Install
 
@@ -78,6 +80,7 @@ Why the intervals are computed on the host, why the window is automatic, and whi
 - **The track reaches back 24 hours.** Sessions whose only activity is older than that leave the timeline; open the Session itself for anything earlier.
 - **The automatic zoom stops at 6 hours.** Activity that reaches further is reached by panning rather than by zooming out, and half of every viewport sits to the right of now — that empty future is the price of centring the cursor.
 - **No virtualisation.** The default filters and the 24-hour cap keep rendered rows in the low hundreds; a full-history mode would need `@tanstack/react-virtual`.
+- **Order, width, and row height are per browser.** They live in `localStorage`, not in the DSH profile, so another browser, a private window, or cleared site data starts from the defaults.
 
 ## Development
 

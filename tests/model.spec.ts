@@ -13,6 +13,7 @@ import {
   centerOffset,
   contentExtent,
   spanOffset,
+  stableOrder,
   taskPhase,
 } from '../src/client/model.ts'
 import { PROJECTION_KEY, type TaskSpan, type WorkPhase } from '../src/contract.ts'
@@ -327,5 +328,87 @@ describe('buildTimeline', () => {
   it('labels a row with the client row display title', () => {
     const model = build([summary('a', '/repo/one', { displayTitle: 'Named task' })], { a: loaded([RECENT]) })
     expect(model.lanes[0]?.tasks[0]?.title).toBe('Named task')
+  })
+})
+
+describe('stableOrder', () => {
+  it('keeps the order the reader last saw', () => {
+    expect(stableOrder(['b', 'a'], ['a', 'b'])).toEqual(['b', 'a'])
+  })
+
+  it('appends ids it has not seen, in their ranked order', () => {
+    expect(stableOrder(['b'], ['c', 'a', 'b'])).toEqual(['b', 'c', 'a'])
+  })
+
+  it('drops ids that are gone', () => {
+    expect(stableOrder(['x', 'b', 'y'], ['b'])).toEqual(['b'])
+  })
+
+  it('equals the ranking when nothing is known yet', () => {
+    expect(stableOrder([], ['c', 'a', 'b'])).toEqual(['c', 'a', 'b'])
+  })
+})
+
+describe('the board holds still while events arrive', () => {
+  const workspaces = [workspace('w1', '/repo/one', 'One'), workspace('w2', '/repo/two', 'Two')]
+
+  const build = (
+    now: number,
+    projections: Readonly<Record<string, SessionProjectionSnapshot>>,
+    overrides: Partial<Parameters<typeof buildTimeline>[0]> = {},
+  ) => buildTimeline({
+    workspaces,
+    list: list([summary('a', '/repo/one'), summary('b', '/repo/two')], projections),
+    statuses: new Map(),
+    now,
+    viewportMs: HOUR,
+    includeSubagents: false,
+    ...overrides,
+  })
+
+  const quiet: SessionProjectionSnapshot = loaded([[NOW - 3 * HOUR, NOW - 2 * HOUR - 30 * 60_000]])
+  const busy: SessionProjectionSnapshot = loaded([[NOW - 30 * 60_000, NOW - 60_000]])
+
+  it('lets a lane steal the top spot when no order is kept', () => {
+    const before = build(NOW, { a: busy, b: quiet })
+    expect(before.lanes.map(lane => lane.title)).toEqual(['One', 'Two'])
+    // 'Two' takes over as the busiest lane, so an unranked build reorders.
+    const after = build(NOW, { a: quiet, b: busy })
+    expect(after.lanes.map(lane => lane.title)).toEqual(['Two', 'One'])
+  })
+
+  it('holds the lane order and the content origin once they are handed back', () => {
+    const first = build(NOW, { a: busy, b: quiet })
+    const order = first.lanes.map(lane => lane.workspaceId)
+    const tasks = Object.fromEntries(first.lanes.map(lane => [lane.workspaceId, lane.tasks.map(task => task.sessionId)]))
+
+    for (const step of [60_000, 5 * 60_000, 30 * 60_000]) {
+      const next = build(NOW + step, { a: busy, b: loaded([[NOW - 30 * 60_000, NOW + step]]) }, {
+        contentAnchor: first.contentAnchor,
+        laneOrder: order,
+        taskOrder: tasks,
+      })
+      expect(next.lanes.map(lane => lane.workspaceId)).toEqual(order)
+      expect(next.contentFrom).toBe(first.contentFrom)
+    }
+  })
+
+  it('moves the content origin when the clock walks a fallback edge', () => {
+    // No activity at all: the left edge is "half a viewport before now", which
+    // is exactly what the anchor exists to stop from sliding.
+    const first = build(NOW, {})
+    const later = build(NOW + 10 * 60_000, {})
+    expect(later.contentFrom).toBeGreaterThan(first.contentFrom)
+    const anchored = build(NOW + 10 * 60_000, {}, { contentAnchor: first.contentAnchor })
+    expect(anchored.contentFrom).toBe(first.contentFrom)
+  })
+
+  it('still extends left when genuinely older activity appears', () => {
+    const first = build(NOW, { a: busy, b: quiet })
+    const older: SessionProjectionSnapshot = loaded([[NOW - 20 * HOUR, NOW - 19 * HOUR]])
+    const next = build(NOW, { a: busy, b: quiet }, {}) // baseline for comparison
+    const extended = build(NOW, { a: older, b: quiet }, { contentAnchor: first.contentAnchor })
+    expect(extended.contentFrom).toBeLessThan(next.contentFrom)
+    expect(extended.contentFrom).toBeLessThanOrEqual(first.contentAnchor)
   })
 })

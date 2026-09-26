@@ -19,6 +19,15 @@ export const zh = {
   'filter.subagents': '显示子代理会话',
   'filter.label': '过滤',
 
+  'density.label': '行高',
+  'density.compact': '紧凑',
+  'density.cosy': '标准',
+  'density.roomy': '宽松',
+
+  'order.reset': '恢复自动排序',
+  'column.resize': '拖动调节名称栏宽度',
+  'lane.reorder': '拖动调整 {workspace} 的顺序',
+
   'axis.now': '现在',
   'axis.recenter': '回到现在',
 
@@ -77,6 +86,15 @@ export const en: Record<TasksKey, string> = {
 
   'filter.subagents': 'Show subagent sessions',
   'filter.label': 'Filters',
+
+  'density.label': 'Row height',
+  'density.compact': 'Compact',
+  'density.cosy': 'Standard',
+  'density.roomy': 'Roomy',
+
+  'order.reset': 'Restore automatic order',
+  'column.resize': 'Drag to resize the name column',
+  'lane.reorder': 'Drag to reorder {workspace}',
 
   'axis.now': 'now',
   'axis.recenter': 'Back to now',

@@ -85,6 +85,8 @@ export interface TimelineModel {
   readonly contentTo: number
   /** Duration of the visible slice, after an automatic zoom is resolved. */
   readonly viewportMs: number
+  /** Left edge to pass back as the next build's `contentAnchor`. */
+  readonly contentAnchor: number
   readonly lanes: readonly TimelineLane[]
   /** Sessions inside the lookback whose projection row is still missing. */
   readonly unloaded: readonly SessionId[]
@@ -104,6 +106,12 @@ export interface TimelineInput {
   readonly viewportMs: number | undefined
   /** Whether subagent child Sessions get their own row. */
   readonly includeSubagents: boolean
+  /** Left edge to keep from an earlier build, so the track stops sliding. */
+  readonly contentAnchor?: number | undefined
+  /** Lane order to keep; workspaces absent from it are appended in activity order. */
+  readonly laneOrder?: readonly string[] | undefined
+  /** Per-workspace task order to keep, keyed by workspace id. */
+  readonly taskOrder?: Readonly<Record<string, readonly string[]>> | undefined
 }
 
 /**
@@ -181,27 +189,53 @@ export function autoViewportMs(spans: readonly TaskSpan[], now: number): number 
 /**
  * Compute the scrollable extent around a centred `now`.
  *
- * The left edge is anchored to real activity, so panning into history never
- * slides under the reader as the clock advances; it falls back to half a
- * viewport before now when there is nothing older to show. The right edge is
- * quantised, so the track does not grow on every clock tick.
+ * The left edge follows real activity, falling back to half a viewport before
+ * now when there is nothing older to show. The right edge is quantised, so the
+ * track does not grow on every clock tick.
+ *
+ * `anchor` pins the left edge for as long as the reader keeps it: the clock term
+ * in the fallback would otherwise walk the whole track sideways every second,
+ * which is invisible while the viewport follows now and very visible once it
+ * does not. A later anchor extends left when genuinely older activity appears,
+ * and never moves right.
  * @param spans - every span considered.
  * @param now - the instant the viewport is centred on.
  * @param viewportMs - the resolved viewport duration.
- * @returns content bounds in Unix epoch milliseconds.
+ * @param anchor - left edge to keep from an earlier build, when one exists.
+ * @returns content bounds plus the unpadded left edge to hand back as the next anchor.
  */
 export function contentExtent(
   spans: readonly TaskSpan[],
   now: number,
   viewportMs: number,
-): { readonly from: number; readonly to: number } {
+  anchor?: number,
+): { readonly from: number; readonly to: number; readonly anchor: number } {
   const pad = Math.max(MIN_PAD_MS, viewportMs * PAD_FRACTION)
   const half = viewportMs / 2
   const { earliest, latest } = recentBounds(spans, now)
-  const left = Number.isFinite(earliest) ? Math.min(earliest, now - half) : now - half
+  const activity = Number.isFinite(earliest) ? Math.min(earliest, now - half) : now - half
+  const left = Math.min(activity, anchor ?? Number.POSITIVE_INFINITY)
   const quantum = Math.max(MIN_PAD_MS, viewportMs / 64)
   const right = Math.ceil((Math.max(now, latest) + half + pad) / quantum) * quantum
-  return { from: left - pad, to: right }
+  return { from: left - pad, to: right, anchor: left }
+}
+
+/**
+ * Keep a list in the order the reader last saw it.
+ *
+ * Rows and lanes are ranked by activity, and activity changes constantly, so
+ * ranking alone would shuffle the board while the reader is looking at it. Ids
+ * already known keep their position; ids that appear for the first time are
+ * appended in their ranked order.
+ * @param known - the order to preserve, from the previous build.
+ * @param ranked - ids in their automatic order, used only for newcomers.
+ * @returns the ids to draw, in order.
+ */
+export function stableOrder(known: readonly string[], ranked: readonly string[]): string[] {
+  const present = new Set(ranked)
+  const kept = known.filter(id => present.has(id))
+  const seen = new Set(kept)
+  return [...kept, ...ranked.filter(id => !seen.has(id))]
 }
 
 /**
@@ -210,7 +244,7 @@ export function contentExtent(
  * @returns the content extent, lanes, and the Sessions still needing a projection read.
  */
 export function buildTimeline(input: TimelineInput): TimelineModel {
-  const { workspaces, list, statuses, now, viewportMs, includeSubagents } = input
+  const { workspaces, list, statuses, now, viewportMs, includeSubagents, contentAnchor, laneOrder, taskOrder } = input
 
   interface Candidate {
     readonly sessionId: SessionId
@@ -262,7 +296,7 @@ export function buildTimeline(input: TimelineInput): TimelineModel {
 
   const everySpan = all.flatMap(candidate => candidate.spans)
   const resolvedViewport = viewportMs ?? autoViewportMs(everySpan, now)
-  const content = contentExtent(everySpan, now, resolvedViewport)
+  const content = contentExtent(everySpan, now, resolvedViewport, contentAnchor)
 
   const lanes = new Map<WorkspaceId, TimelineTask[]>()
   for (const candidate of all) {
@@ -289,23 +323,38 @@ export function buildTimeline(input: TimelineInput): TimelineModel {
     usedWorkspaces.add(candidate.workspaceId)
   }
 
-  const built: TimelineLane[] = []
+  const byId = new Map<WorkspaceId, TimelineLane>()
+  const rankedLanes: WorkspaceId[] = []
   for (const workspace of workspaces) {
     const tasks = lanes.get(workspace.workspaceId)
     if (tasks === undefined) continue
-    const ordered = [...tasks].sort((left, right) => right.lastEventAt - left.lastEventAt)
-    built.push({
+    const rank = [...tasks].sort((left, right) => right.lastEventAt - left.lastEventAt)
+    const keep = taskOrder?.[workspace.workspaceId]
+    const position = new Map(stableOrder(
+      keep ?? rank.map(task => task.sessionId),
+      rank.map(task => task.sessionId),
+    ).map((id, index) => [id, index]))
+    const ordered = [...rank].sort((left, right) =>
+      (position.get(left.sessionId) ?? 0) - (position.get(right.sessionId) ?? 0))
+    byId.set(workspace.workspaceId, {
       workspaceId: workspace.workspaceId,
       title: workspace.title,
       tasks: ordered,
-      latest: ordered[0]?.lastEventAt ?? 0,
+      latest: rank[0]?.lastEventAt ?? 0,
     })
+    rankedLanes.push(workspace.workspaceId)
   }
-  built.sort((left, right) => right.latest - left.latest)
+  rankedLanes.sort((left, right) => (byId.get(right)?.latest ?? 0) - (byId.get(left)?.latest ?? 0))
+  const laneIds = laneOrder === undefined ? rankedLanes : stableOrder(laneOrder, rankedLanes)
+  const built = laneIds.flatMap(id => {
+    const lane = byId.get(id as WorkspaceId)
+    return lane === undefined ? [] : [lane]
+  })
 
   return {
     contentFrom: content.from,
     contentTo: content.to,
+    contentAnchor: content.anchor,
     viewportMs: resolvedViewport,
     lanes: built,
     unloaded,

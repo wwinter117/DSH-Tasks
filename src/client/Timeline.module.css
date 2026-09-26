@@ -95,11 +95,52 @@
 
 /* ── canvas ──────────────────────────────────────────────────────────────── */
 
-.canvas {
+.viewport {
   position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.canvas {
   flex: 1;
   min-height: 0;
   overflow: auto;
+}
+
+/* The divider lives outside the scrolled content, so it stays glued to the
+   column it resizes no matter how far the track is panned. */
+.resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--task-label-width);
+  z-index: 6;
+  width: 7px;
+  margin-left: -3px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.resizer::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 1px;
+  content: '';
+  background: transparent;
+}
+
+.resizer:hover::after,
+.resizer:active::after,
+.resizer:focus-visible::after {
+  background: var(--dsw-alias-brand-primary);
+}
+
+.resizer:focus-visible {
+  outline: none;
 }
 
 /*
@@ -196,6 +237,32 @@
   display: contents;
 }
 
+.laneTitle[data-dragging='true'] {
+  opacity: 0.55;
+}
+
+.laneTitle[data-drop='before'] {
+  box-shadow: inset 0 2px 0 var(--dsw-alias-brand-primary);
+}
+
+.laneTitle[data-drop='after'] {
+  box-shadow: inset 0 -2px 0 var(--dsw-alias-brand-primary);
+}
+
+.dragHandle {
+  flex: none;
+  padding: 0 2px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: grab;
+  touch-action: none;
+}
+
+.dragHandle:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
 .laneTitle {
   position: sticky;
   left: 0;
@@ -203,7 +270,8 @@
   display: flex;
   gap: 6px;
   align-items: center;
-  padding: 4px 12px;
+  height: var(--task-lane-height);
+  padding: 0 12px 0 8px;
   background: var(--dsw-alias-bg-layer-2);
   border-right: 0.5px solid var(--dsw-alias-border-l2);
   border-bottom: 0.5px solid var(--dsw-alias-border-l1);
@@ -284,6 +352,7 @@
   gap: 6px;
   align-items: center;
   min-width: 0;
+  height: var(--task-row-height);
   padding: 0 12px 0 28px;
   background: var(--dsw-alias-bg-base);
   border-right: 0.5px solid var(--dsw-alias-border-l2);
@@ -332,7 +401,7 @@
 
 .rowTrack {
   position: relative;
-  height: 24px;
+  height: var(--task-row-height);
   border-bottom: 0.5px solid var(--dsw-alias-border-l1);
 }
 
@@ -352,7 +421,7 @@
   top: 50%;
   left: var(--task-left);
   width: var(--task-width);
-  height: 4px;
+  height: calc(var(--task-bar-height) * 0.4);
   background: var(--task-bar);
   border-radius: 2px;
   opacity: 0.24;
@@ -364,7 +433,7 @@
   top: 50%;
   left: var(--task-left);
   width: var(--task-width);
-  height: 10px;
+  height: var(--task-bar-height);
   min-width: 3px;
   background: var(--task-bar);
   border-radius: var(--dsw-radius-xs);
