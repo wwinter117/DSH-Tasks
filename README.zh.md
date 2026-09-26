@@ -21,7 +21,7 @@
 
 DSH-Tasks 是一个 bundle：一个包，包含 host 半边和浏览器半边。
 
-**从 GUI 装。** 打开侧边栏的 **插件** 页 → **Add plugin**，填本仓库的 Git 地址或发布后的包名。装完需要重启一次 `dsh web` 进程——bundle 成员是在启动时读取的。
+**从 GUI 装。** 打开侧边栏的 **插件** 页 → **Add plugin**，填本仓库的 Git 地址或发布后的包名。bundle 成员是在启动时读取的，所以装完需要重启一次 `dsh web` 进程。
 
 **从命令行装。**
 
@@ -44,9 +44,11 @@ pnpm add link:/path/to/DSH-Tasks
       name: 'dsh-tasks'
 ```
 
-`dsh web` 会监听 profile 清单，所以 `touch` 一下该目录的 `package.json` 就能让改动生效，不必重启。
+`dsh web` 会监听 profile 的 patch 文件与清单，所以这一行不需要重启就能生效。
 
-如果面板没出现，重启一次 `dsh web` 进程：插件的 host 半边每个进程只导入一次，而同一路径下更新过的 `lib/index.js` 会留在 Node 的 ESM 缓存里。
+**然后刷新一下浏览器页面。** 在页面加载之后才进入 boot 图的 client 行，不会被客户端热重载接住——它只替换自己已经认识的 bundle。刷新一次，侧边栏入口就出现了。
+
+如果面板出现了但每一行都是空的，说明 host 半边还是进程最初导入的那个模块：插件每个进程只导入一次，而同一路径下重建过的 `lib/index.js` 可能被 Node 的 ESM 缓存挡下，这时重启 `dsh web`。**host 半边正常时任务行上会有活动段；陈旧时只有行、没有段。**
 
 ## 前置条件
 

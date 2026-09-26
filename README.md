@@ -21,7 +21,7 @@ Every DSH Session is a task. The timeline draws each one as a row on a wall-cloc
 
 DSH-Tasks is a bundle: one package with a host half and a browser half.
 
-**From the GUI.** Open the sidebar's **Plugins** page, choose **Add plugin**, and give it this repository's Git address or a published package name. Restart the `dsh web` process afterwards — bundle membership is read at startup.
+**From the GUI.** Open the sidebar's **Plugins** page, choose **Add plugin**, and give it this repository's Git address or a published package name. Bundle membership is read at startup, so restart the `dsh web` process once afterwards.
 
 **From the CLI.**
 
@@ -44,9 +44,11 @@ Then append to `~/.dsh/profiles/web/cordis.patch.yml`:
       name: 'dsh-tasks'
 ```
 
-`dsh web` watches the profile manifest, so touching `package.json` in that directory applies the change without a restart.
+`dsh web` watches the profile's patch file and manifest, so the row applies without a restart.
 
-Either way, restart the `dsh web` process once if the panel does not appear: a plugin's host half is imported once per process, and an updated `lib/index.js` under the same path stays in Node's ESM cache.
+**Then reload the browser page.** A client row that entered the boot graph after the page loaded is not picked up by the client's hot-reload path — it only swaps bundles it already knows. One refresh adds the sidebar entry.
+
+If the panel appears but every row is empty, the host half is still the module the process imported first: a plugin is imported once per process, and a rebuilt `lib/index.js` at the same path can be served from Node's ESM cache. Restart `dsh web`. A working host half shows activity segments; a stale one shows rows with no bars.
 
 ## Requirements
 
