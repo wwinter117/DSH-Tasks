@@ -1,0 +1,532 @@
+/*
+ * Task timeline presentation. Semantic tokens only: every colour comes from the
+ * `--dsw-alias-*` scale so the panel follows the active theme, and the six phase
+ * hues come from the theme's state family rather than a local palette.
+ */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-base);
+}
+
+/* ── toolbar ─────────────────────────────────────────────────────────────── */
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
+}
+
+.title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.summary {
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.spacer {
+  flex: 1;
+}
+
+.group {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.groupLabel {
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.segment {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--dsw-alias-bg-layer-2);
+  border-radius: var(--dsw-radius-sm);
+}
+
+.segmentButton {
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: var(--dsw-radius-xs);
+}
+
+.segmentButton:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.segmentButton[data-active='true'] {
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-layer-1);
+  box-shadow: var(--dsw-elevation-soft);
+}
+
+/* ── canvas ──────────────────────────────────────────────────────────────── */
+
+.canvas {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: var(--task-label-width) minmax(0, 1fr);
+  min-width: 0;
+}
+
+.axisRow {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--dsw-alias-bg-base);
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
+}
+
+.axisLabel {
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+  border-right: 0.5px solid var(--dsw-alias-border-l2);
+}
+
+.track {
+  position: relative;
+  height: 28px;
+  overflow: hidden;
+}
+
+.tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--task-left);
+  border-left: 0.5px solid var(--dsw-alias-border-l1);
+}
+
+.tickLabel {
+  position: absolute;
+  top: 6px;
+  left: 4px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-tertiary);
+  white-space: nowrap;
+}
+
+.nowLine {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--task-left);
+  border-left: 1px solid var(--dsw-alias-brand-primary);
+}
+
+/* ── lanes ───────────────────────────────────────────────────────────────── */
+
+.laneHeader {
+  display: contents;
+}
+
+.laneTitle {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 4px 12px;
+  background: var(--dsw-alias-bg-layer-2);
+  border-right: 0.5px solid var(--dsw-alias-border-l2);
+  border-bottom: 0.5px solid var(--dsw-alias-border-l1);
+}
+
+.laneTrack {
+  background: var(--dsw-alias-bg-layer-2);
+  border-bottom: 0.5px solid var(--dsw-alias-border-l1);
+}
+
+.laneButton {
+  display: flex;
+  flex: 1;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+  text-align: left;
+  cursor: pointer;
+  background: none;
+  border: 0;
+}
+
+.caret {
+  flex: none;
+  width: 1em;
+  font-size: 10px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.laneName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.laneCount {
+  flex: none;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.addButton {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: var(--dsw-radius-xs);
+}
+
+.addButton:hover {
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* ── task rows ───────────────────────────────────────────────────────────── */
+
+.row {
+  display: contents;
+}
+
+.rowLabel {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+  padding: 0 12px 0 28px;
+  border-right: 0.5px solid var(--dsw-alias-border-l2);
+  border-bottom: 0.5px solid var(--dsw-alias-border-l1);
+}
+
+.rowButton {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+  text-align: left;
+  cursor: pointer;
+  background: none;
+  border: 0;
+}
+
+.rowButton:hover .rowTitle {
+  color: var(--dsw-alias-label-primary);
+}
+
+.rowButton[data-selected='true'] .rowTitle {
+  color: var(--dsw-alias-label-primary);
+  font-weight: 600;
+}
+
+.rowTitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.unread {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  background: var(--dsw-alias-state-success-primary);
+  border-radius: 50%;
+}
+
+.rowTrack {
+  position: relative;
+  height: 24px;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l1);
+}
+
+.rowTrack:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.gridLine {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--task-left);
+  border-left: 0.5px solid var(--dsw-alias-border-l1);
+}
+
+/* ── bars ────────────────────────────────────────────────────────────────── */
+
+/*
+ * Spread summary: the reach from the first to the last segment, drawn under the
+ * segments. A day of intermittent work reads as one continuous task instead of a
+ * scatter of slivers.
+ */
+.range {
+  position: absolute;
+  top: 50%;
+  left: var(--task-left);
+  width: var(--task-width);
+  height: 4px;
+  background: var(--task-bar);
+  border-radius: 2px;
+  opacity: 0.24;
+  transform: translateY(-50%);
+}
+
+.bar {
+  position: absolute;
+  top: 50%;
+  left: var(--task-left);
+  width: var(--task-width);
+  height: 10px;
+  min-width: 3px;
+  background: var(--task-bar);
+  border-radius: var(--dsw-radius-xs);
+  transform: translateY(-50%);
+}
+
+.bar[data-clipped-start='true'] {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.bar[data-clipped-end='true'] {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+/* An open right edge is the "still working" cue; the halo carries the pulse. */
+.bar[data-running='true'] {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  box-shadow: 0 0 0 1px var(--task-bar);
+}
+
+.bar[data-running='true']::after {
+  position: absolute;
+  top: 0;
+  right: -2px;
+  width: 2px;
+  height: 100%;
+  content: '';
+  background: var(--task-bar);
+  animation: task-pulse 1.6s var(--ds-ease-in-out, ease-in-out) infinite;
+}
+
+@keyframes task-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.25;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bar[data-running='true']::after {
+    animation: none;
+  }
+}
+
+.phaseIdle {
+  --task-bar: var(--dsw-alias-state-idle-primary);
+}
+
+.phaseGenerating {
+  --task-bar: var(--dsw-alias-state-business-primary);
+}
+
+.phaseTool {
+  --task-bar: var(--dsw-alias-state-business-tertiary);
+}
+
+.phaseDelegated {
+  --task-bar: var(--dsw-alias-state-success-primary);
+}
+
+.phaseApproval {
+  --task-bar: var(--dsw-alias-state-warn-primary);
+}
+
+.phaseQuestion {
+  --task-bar: var(--dsw-alias-state-warn-tertiary);
+}
+
+/* ── empties ─────────────────────────────────────────────────────────────── */
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 48px 16px;
+  text-align: center;
+}
+
+.emptyTitle {
+  font-size: 13px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.emptyHint {
+  font-size: 12px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* ── detail ──────────────────────────────────────────────────────────────── */
+
+.detail {
+  position: absolute;
+  top: 56px;
+  right: 16px;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 320px;
+  max-height: calc(100% - 72px);
+  padding: 14px;
+  overflow: auto;
+  background: var(--dsw-alias-bg-layer-1);
+  border: 0;
+  border-radius: var(--dsw-radius-md);
+  box-shadow: var(--dsw-elevation-panel);
+}
+
+.detailHead {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.detailTitle {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.detailClose {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  font: inherit;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: var(--dsw-radius-xs);
+}
+
+.detailClose:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.detailRow {
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  font-size: 12px;
+}
+
+.detailKey {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.detailValue {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.detailPhase {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.phaseSwatch {
+  width: 8px;
+  height: 8px;
+  background: var(--task-bar);
+  border-radius: 2px;
+}
+
+.detailSpans {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 180px;
+  padding: 6px 8px;
+  overflow: auto;
+  background: var(--dsw-alias-bg-layer-2);
+  border-radius: var(--dsw-radius-sm);
+}
+
+.detailSpan {
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.detailAction {
+  align-self: flex-start;
+  padding: 5px 12px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+  background: var(--dsw-alias-button-elevated-fill, var(--dsw-alias-bg-layer-2));
+  border: 0;
+  border-radius: var(--dsw-radius-sm);
+}
+
+.detailAction:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}

@@ -1,0 +1,8 @@
+# The dsh-tasks bundle layer.
+#
+# One row is enough. The browser half is registered by the package's own
+# `dsh.client` declaration, which the web client's module scan reads from this
+# entry's package manifest; a second client row would name the same entry twice.
+- insert:
+    - id: task-timeline
+      name: 'dsh-tasks'
